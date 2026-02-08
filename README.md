@@ -6,6 +6,31 @@ This project replaces manual schedule charts with an interactive, map-based expe
 
 ---
 
+## 🌐 Live Demo
+👉 https://pu-transit.vercel.app/
+
+---
+
+## 🔥 Key Highlights
+
+- Vadodara-only geolocation restriction  
+- Shift-based bus filtering system  
+- Open-source mapping architecture (Leaflet + OpenRouteService)  
+- Real-time Firebase sync  
+- Lightweight framework-free design  
+
+---
+
+## 🚀 Future Enhancements
+
+- Live bus GPS tracking  
+- Driver mobile application  
+- Push notifications for bus arrival  
+- Route analytics dashboard  
+- Multi-university support  
+
+---
+
 ## 🏛️ Project Architecture & Workflow
 
 The system is built on a **Serverless Architecture** using Firebase for real-time data syncing and Leaflet.js for open-source mapping.
@@ -69,7 +94,7 @@ Data is stored in a simple JSON tree:
     "GJ-06-XX-1234": {
       "busNumber": "GJ-06-XX-1234",
       "shift": "First Shift",
-      "path": [ {...}, {...} ], // Array of 100+ coordinates for the road line
+      "path": [ {...}, {...} ],
       "stops": [
         { "name": "Stop A", "lat": 22.3, "lng": 73.1 },
         { "name": "Stop B", "lat": 22.4, "lng": 73.2 }
@@ -97,63 +122,40 @@ Data is stored in a simple JSON tree:
     ```
 
 2.  **Configure Firebase**
-    *   Create a project in the [Firebase Console](https://console.firebase.google.com/).
-    *   Enable **Realtime Database** in test mode (or configure rules).
-    *   Copy your web app configuration.
-    *   Open `js/firebase-config.js` and paste your credentials:
-        ```javascript
-        const firebaseConfig = {
-            apiKey: "YOUR_API_KEY",
-            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-            databaseURL: "https://YOUR_PROJECT_ID.firebaseio.com",
-            projectId: "YOUR_PROJECT_ID",
-            storageBucket: "YOUR_PROJECT_ID.appspot.com",
-            messagingSenderId: "YOUR_SENDER_ID",
-            appId: "YOUR_APP_ID"
-        };
-        ```
+    *   Create a project in the Firebase Console.
+    *   Enable Realtime Database.
+    *   Paste credentials in `js/firebase-config.js`.
 
 3.  **Configure Maps API**
-    *   Sign up at [OpenRouteService](https://openrouteservice.org/) and get an API Key.
-    *   Open `js/map-config.js` and replace the placeholder key:
-        ```javascript
-        export const mapConfig = {
-            // ...
-            orsApiKey: 'YOUR_OPENROUTESERVICE_API_KEY',
-            // ...
-        };
-        ```
+    *   Get ORS API key.
+    *   Paste in `js/map-config.js`.
 
 4.  **Run Locally**
-    *   Simply open `index.html` in your browser.
-    *   *Recommended:* Use a local server (e.g., Live Server in VS Code) to avoid CORS issues with modules.
+    *   Open `index.html` in browser.
+    *   Recommended: Use Live Server.
 
 ---
 
 ## 📂 Project Structure
 
 ```
-├── admin.html          # Admin dashboard for managing routes
-├── index.html          # Landing page
-├── student.html        # Student tracking interface
+├── admin.html
+├── index.html
+├── student.html
 ├── css/
-│   └── style.css       # Global styles (Glassmorphism theme)
+│   └── style.css
 ├── js/
-│   ├── admin.js        # Admin logic (Route generation, saving)
-│   ├── student.js      # Student logic (Tracking, markers)
-│   ├── firebase-config.js # Firebase connection setup
-│   └── map-config.js   # Map settings & API keys
-└── README.md           # Project documentation
+│   ├── admin.js
+│   ├── student.js
+│   ├── firebase-config.js
+│   └── map-config.js
+└── README.md
 ```
-
-## 🔐 Admin Default Credentials
-*(For testing purposes only - Change in production code)*
-*   **Password**: `Aditya154`
 
 ---
 
 ## 📜 License
-This project is open-source and available under the [MIT License](LICENSE).
+This project is open-source and available under the MIT License.
 
 <p align="center">
   Built with ❤️ for Parul University
