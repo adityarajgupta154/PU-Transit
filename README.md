@@ -42,7 +42,7 @@ Data lives in **Firebase Authentication** and the **Firebase Realtime Database (
 |---|---|
 | **Student / staff** | Pick a shift (First / ADM-Medical / General), enter a bus number and see the published route — origin, destination, ordered stops and the road path — on a map locked to Vadodara. The bus marker appears **only while the tracking contract is satisfied**, with the age of the last update and an explicit state (not started, acquiring, live, delayed, weak GPS, GPS unavailable, offline, ended). Notices from the transport office and the service calendar are shown on the same page. Personal location on the map is opt-in and never leaves the phone. |
 | **Driver** | Signs in with a driver account, sees the bus assigned for today (a dated assignment wins over the standing bus), runs a **preflight** (account, assignment, bus in service, network, location permissions, battery optimisation) and taps **Start** / **End**. The screen reports GPS quality, connection state and the last successful sync truthfully: *acquiring* before *live*, *pending end* when offline, *conflict* when another device owns the trip. |
-| **Admin (transport office)** | **Fleet** — bus registry, live feeds, force-end and handover. **Routes** — stops-first route builder with Vadodara-boxed place search, coordinate / Google Maps link paste and map taps; drafts, publish, versions, archive. **Users** — role confirmation, membership expiry, email changes. **Assignments** — standing and dated bus assignments per driver. **Notices** and **Calendar** — service notices (≤ 280 characters, ≤ 30 days) and no-service days. **System** — append-only audit log and legacy import. |
+| **Admin (transport office)** | **Fleet** — bus registry, live feeds, force-end and handover. **Routes** — stops-first route builder with Vadodara-boxed place search, coordinate / Google Maps link paste and map taps; drafts, publish, versions, archive. **Users** — role confirmation, standing bus per driver, membership expiry. **Assignments** — dated bus assignments that override the standing bus. **Notices** and **Calendar** — service notices (≤ 280 characters, ≤ 30 days) and no-service days. **System** — append-only audit log and legacy import. |
 
 What it deliberately does **not** claim: no ETA, no historical trails, no "Live" just because Start was pressed, and no student location stored on the server.
 
@@ -104,7 +104,7 @@ sequenceDiagram
     participant St as Student page
 
     Dr->>Dr: Preflight: account, assignment, bus in service,<br/>network, permissions all green
-    Dr->>API: POST /tracking/:busId/start (tripId, publisherSession)
+    Dr->>API: POST /tracking/:busId/start (tripId, publisherId)
     API->>DB: atomic write: tripId, driverUid, session, startedAt
     API-->>Dr: 201 started (409 if another phone owns the bus)
     loop every 5 s while a GPS fix exists
@@ -161,7 +161,7 @@ What riders see is derived on the client from **server** timestamps in the feed 
 | `offline` | Feed silent past the offline window |
 | `ended` | Driver or office ended the trip |
 
-Ownership rules enforced by the API and the Rules: one publisher per bus (`tripId` + `publisherSession`), samples must carry a strictly increasing sequence, a superseded session receives `409 SESSION_CONFLICT` and drops to idle, an office **force-end** or **handover** ends the current trip and writes an audit row, and an ended trip cannot be revived.
+Ownership rules enforced by the API and the Rules: one publisher per bus (`tripId` + `publisherId`), samples must carry a strictly increasing sequence, a superseded session receives `409 SESSION_CONFLICT` and drops to idle, an office **force-end** or **handover** ends the current trip and writes an audit row, and an ended trip cannot be revived.
 
 ---
 
@@ -173,14 +173,15 @@ stateDiagram-v2
     draft --> draft: edit stops, shift, bus, road path
     draft --> published: publish → routes + routeVersions/v1
     published --> published: edit → new version vN
-    published --> archived: archive (one-way)
+    published --> archived: archive
+    archived --> published: publish again restores it
     draft --> [*]: delete (never-published drafts only)
 ```
 
 - A route needs a shift, a bus from the registry, at least one stop and the start / end shown to riders; the builder names every missing field under itself.
 - Road paths come from ORS directions bound to the exact stop list that was plotted; a stale response never attaches to an edited list.
-- Riders always read `routes/{id}` (the current published version); older versions stay readable at `routes/{id}/versions/{n}` for audit.
-- A bus that is mid-trip cannot have its route or assignment changed underneath the driver.
+- Riders always read `routes/{id}` (the current published version); older versions are kept at `routeVersions/{id}/{n}` and served by `GET /routes/:id/versions/:n`.
+- A running trip pins the route version it started with; new versions reach riders on the next trip, and moving a route to another bus is refused while that bus has a live trip.
 
 ---
 
@@ -190,13 +191,13 @@ All product data is in RTDB under these top-level nodes ([`firebase/database.rul
 
 | Node | Contents | Writers |
 |---|---|---|
-| `memberships/{uid}` | role (`student` · `staff` · `driver` · `admin`), status (`pending` · `approved` · `rejected` · `suspended`), email, requested role, `expiresAt`, timestamps | self-create at sign-up; admins |
-| `buses/{busId}` | bus registry: label, status (active / inactive), reason | admins |
-| `routes/{id}` | published route: shift, bus, kind (regular / shuttle), origin, destination, ordered stops, geometry, add-ons | admins via API |
+| `memberships/{uid}` | role (`student` · `staff` · `driver` · `admin`), status (`pending` · `approved` · `rejected` · `suspended`), email, requested role, `assignedBusId` (standing bus), `expiresAt`, timestamps | self-create at sign-up; admins |
+| `buses/{busId}` | bus registry: label, status (`active` / `out_of_service`), reason | admins |
+| `routes/{id}` | published route: shift, bus, kind (`bus` / `shuttle`), origin, destination, ordered stops, geometry, add-ons | admins via API |
 | `routeDrafts/{id}` | unpublished drafts | admins via API |
 | `routeVersions/{id}/{n}` | immutable published versions | API on publish |
-| `assignments/{driverUid}/{slot}` | standing bus and dated overrides per driver | admins |
-| `tracking/{busId}` | the single atomic trip node: `tripId`, `driverUid`, `publisherSession`, last sample, accuracy, heartbeat, `endedAt` | driver via API; admin force-end / handover |
+| `assignments/{driverUid}/{id}` | dated assignments (the standing bus is `memberships/{uid}.assignedBusId`) | admins |
+| `tracking/{busId}` | the single atomic trip node: `tripId`, `driverUid`, `publisherId`, last sample, accuracy, heartbeat, `endedAt` | driver via API; admin force-end / handover |
 | `audit/{id}` | append-only office actions (force-end, handover, role changes, route publishes, …) | API |
 | `notices/{id}` | office notices (≤ 280 chars, ≤ 30 days) | admins |
 | `serviceCalendar/{date}` | no-service days; no entry means no claim | admins |
@@ -209,7 +210,7 @@ All product data is in RTDB under these top-level nodes ([`firebase/database.rul
 - **Identity** — Firebase email/password with mandatory email verification. Access requires an eligible email **and** an approved, current membership. University staff and students use `@paruluniversity.ac.in`; a new student may use a personal email for 30 days from membership creation, then must switch to a verified university address from **Account**.
 - **Roles** — student / staff are approved immediately; driver and admin requests are approved as student **plus a requested role** until the office confirms them in **Admin → Users**. The root admin account is protected and can also drive (still assignment-gated).
 - **Revocation** — the web app has no RTDB listener; an API `403` is the revocation signal and refreshes `/auth/me` once. Membership expiry (`expiresAt`) is enforced in Rules and in every API gate.
-- **Secrets** — the ORS key and the service account exist only on the server. The web bundle never contains a server secret; [`scripts/secrets-sweep.sh`](scripts/secrets-sweep.sh) scans the tree, the git history and both builds and includes a negative control so a "clean" result is proven, not assumed.
+- **Secrets** — the ORS key and the service account exist only on the server. The web bundle never contains a server secret; [`scripts/secrets-sweep.sh`](scripts/secrets-sweep.sh) scans the tree, the git history and both build outputs without ever printing a value (planted-control runs are recorded in `docs/evidence`).
 - **Abuse limits** — per-user then per-client rate limits ([`docs/ops-notes.md`](docs/ops-notes.md)), per-path request body caps, key-safe ids validated by the OpenAPI `pattern`s.
 - **Retention** — `retention:cleanup` ends trips silent for more than an hour and removes tracking data older than 90 days using a service-account identity, never the app path.
 - **Privacy** — no rider location is uploaded; drivers publish only while a trip is running, and the audit trail records office actions, not movement history.
@@ -226,9 +227,10 @@ All routes are served under `/api`. Every protected route requires `Authorizatio
 | GET | `/auth/me` | identity, membership, drivable buses, today's assignment | signed-in |
 | GET | `/routes`, `/routes/:id/versions/:n` | published routes and versions | member |
 | POST / PUT / PATCH / DELETE | `/routes`, `/routes/:id` | create, replace, edit, delete draft | admin |
-| POST | `/routes/:id/archive` | archive (one-way) | admin |
+| POST | `/routes/:id/archive` | archive (publishing again restores the route) | admin |
 | GET | `/buses` · POST `/buses` · PATCH `/buses/:busId` | bus registry | member · admin |
-| GET / POST / DELETE | `/assignments`, `/assignments/:driverUid/:assignmentId` | standing and dated assignments | admin |
+| PATCH | `/memberships/:uid` | role, status, standing bus, expiry | admin |
+| GET / POST / DELETE | `/assignments`, `/assignments/:driverUid/:assignmentId` | dated assignments | admin |
 | GET | `/tracking/:busId` | rider feed with server timing | member |
 | GET | `/tracking` | fleet feeds | admin |
 | POST | `/tracking/:busId/start` · `/sample` · `/heartbeat` · `/end` | trip lifecycle (single owner, idempotent) | driver with assignment |
@@ -252,7 +254,7 @@ The full contract, including response schemas and error codes, is the OpenAPI do
 │   │   ├── src/components/         auth-gate, layout shell, map/{map-view,vector-basemap,place-search}, ui/*
 │   │   ├── src/lib/                api client, status-aging, map-config, ors helpers, firebase, storage
 │   │   ├── src/hooks/              use-transit (feeds + aging timers)
-│   │   ├── public/                 firebase-database.rules.json (canonical Rules), logo, favicon
+│   │   ├── public/                 firebase-database.rules.json (canonical Rules), logo.png, robots.txt
 │   │   └── DESIGN.md · PRODUCT.md  Design system ("Metro typographic tiles") and product record
 │   ├── api-server/                 Express 5 API
 │   │   ├── src/routes/             transit (routes, auth/me, notices, calendar, audit), tracking, geo, buses, assignments, health
@@ -344,7 +346,7 @@ Web output is `artifacts/pu-transit/dist/public`; API output is `artifacts/api-s
 
 ## 11. Configuration
 
-The API reads process environment variables (no automatic `.env` loading). Names only — values are never committed.
+The API reads process environment variables (no automatic `.env` loading). Operator-set variables only, names only — values are never committed; hosting platforms inject their own runtime variables in addition.
 
 | Variable | Used by | Notes |
 |---|---|---|
@@ -355,7 +357,10 @@ The API reads process environment variables (no automatic `.env` loading). Names
 | `PU_TRANSIT_DEMO`, `VITE_PU_TRANSIT_DEMO` | demo launcher | never set these on a real deployment |
 | `UNIVERSITY_EMAIL_DOMAINS` | API | defaults to `paruluniversity.ac.in`; must agree with the Rules |
 | `ORS_API_KEY` | API only | OpenRouteService key for `/api/geo/*`; never a `VITE_` variable |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | maintenance scripts only | retention job, migrations, inspections — not the app path |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` (or `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY`) | maintenance scripts only | retention job and Firebase inspection — not the app path |
+| `PU_ADMIN_ID_TOKEN` | bus-registry migration script | short-lived admin ID token; never stored |
+| `LOG_LEVEL` | API | pino level, default `info` |
+| `GCLOUD_PROJECT` | demo launcher | set by `pnpm demo` for the emulators |
 | `DATABASE_URL` | legacy import endpoint only | PostgreSQL for the one-time routes import |
 | `EXPO_PUBLIC_DOMAIN` | native app | host that serves `/api` for the driver app |
 
@@ -369,7 +374,7 @@ pnpm --filter @workspace/pu-transit run test              # web: Vitest (pages, 
 pnpm --filter @workspace/api-server run test              # API: Vitest (trip transitions, gates, bounds, rate limits)
 pnpm --filter @workspace/pu-transit-driver run test       # native: node:test (preflight steps, build step, account rules)
 pnpm --filter @workspace/scripts run firebase:rules:test  # RTDB Rules against the emulator (Java 21+)
-pnpm --filter @workspace/scripts run secrets:sweep        # tree + history + build outputs, with a negative control
+pnpm --filter @workspace/scripts run secrets:sweep        # tree + history + build outputs (build both first)
 ```
 
 What the suites protect
@@ -406,9 +411,9 @@ Details and the run protocol: [`docs/evidence/rehearsal-log-nat01.md`](docs/evid
 
 ## 14. Deployment
 
-- The web app is served at `/` and the API at `/api` on the same origin; the web bundle only ever calls same-origin `/api`, so no CORS configuration is needed.
+- The web app is served at `/` and the API at `/api` on the same origin; the web bundle only ever calls same-origin `/api`. The API currently registers permissive `cors()`; tightening it to the deployed origin is an open hardening item.
 - Firebase Rules are **published by the project owner** from the Firebase console (or copied from the in-app `/setup` page). A code change to the Rules file changes nothing until it is published; an API path that is authorised but hits unpublished Rules answers `503` with code `rules`.
-- Server secrets (`ORS_API_KEY`, service account) are configured on the host, never in the repository.
+- Server secrets (`ORS_API_KEY`, service account) are configured on the host, never in the tree. The original static app (2026, before the rebuild) shipped a browser-side ORS key; it was removed from the tree on 13 Sep 2026 but still exists in Git history, so that key must be treated as public and rotated by the owner at OpenRouteService.
 - The retention job (`pnpm --filter @workspace/scripts run retention:cleanup`) is meant to run on a schedule with the service-account identity.
 - Rate limits, request bounds and incident notes: [`docs/ops-notes.md`](docs/ops-notes.md).
 
@@ -438,7 +443,7 @@ Details and the run protocol: [`docs/evidence/rehearsal-log-nat01.md`](docs/evid
 
 ## 16. Project status
 
-The web app, API and Rules are built and covered by automated tests; the native driver app is a feasibility build whose background-tracking behaviour has not yet been rehearsed on a device. Items that still depend on the operator — publishing the latest Rules payload, the live driver rehearsal, the native device run — are tracked with dates in [`docs/Delivery-Status.md`](docs/Delivery-Status.md) and [`docs/evidence/README.md`](docs/evidence/README.md), never implied by this README.
+The web app, API and Rules are built and covered by automated tests; the native driver app is a feasibility build whose background-tracking behaviour has not yet been rehearsed on a device. Items that still depend on the operator — publishing the latest Rules payload, rotating the historical ORS key, restricting CORS, the live driver rehearsal, the native device run — are tracked with dates in [`docs/Delivery-Status.md`](docs/Delivery-Status.md) and [`docs/evidence/README.md`](docs/evidence/README.md), never implied by this README.
 
 ---
 
